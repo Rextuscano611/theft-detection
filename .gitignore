@@ -1,0 +1,22 @@
+# Node modules — never upload these, npm install recreates them
+node_modules/
+
+# Windows system files
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# VS Code settings — optional, remove if you want to share your settings
+.vscode/
+
+# Alert screenshots if re-enabled later
+*.png
+
+# Logs
+*.log
+
+# Environment variables — if you add API keys later
+.env
+
+# OS files
+.DS_Store

@@ -1,0 +1,55 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #0f0f0f;
+  color: #ffffff;
+  font-family: monospace;
+  padding: 16px;
+}
+
+#dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+h2 { font-size: 18px; color: #aaaaaa; }
+h3 { font-size: 14px; color: #888888; margin-bottom: 8px; }
+
+#video-container {
+  position: relative;
+  display: inline-block;
+}
+
+/* Video and canvas must be exactly the same size */
+#video {
+  width: 1280px;
+  height: 720px;
+  background: #111;
+  display: block;
+}
+
+#overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 1280px;
+  height: 720px;
+  pointer-events: none; /* clicks pass through to video */
+}
+
+#alert-panel {
+  max-height: 200px;
+  overflow-y: auto;
+  background: #1a1a1a;
+  padding: 12px;
+  border-radius: 6px;
+}
+
+.log-entry {
+  font-size: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid #333;
+}
+.log-entry.watch   { color: #f0c040; }
+.log-entry.alert   { color: #f08020; }
+.log-entry.high    { color: #ff4040; font-weight: bold; }
