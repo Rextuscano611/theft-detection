@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Zone Setup — Theft Detection</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f0f0f;
+      color: #ffffff;
+      font-family: monospace;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    h2 { color: #aaaaaa; font-size: 18px; }
+
+    #instructions {
+      background: #1a1a1a;
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      color: #cccccc;
+      line-height: 1.8;
+    }
+
+    #canvas-container {
+      position: relative;
+      display: inline-block;
+      cursor: crosshair;
+    }
+
+    #setupVideo {
+      width: 1280px;
+      height: 720px;
+      background: #111;
+      display: block;
+    }
+
+    #setupCanvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 1280px;
+      height: 720px;
+    }
+
+    #controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    button {
+      padding: 10px 24px;
+      font-size: 14px;
+      font-family: monospace;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    #btnSave   { background: #44aa44; color: #000; }
+    #btnClear  { background: #f08020; color: #000; }
+    #btnUndo   { background: #4488ff; color: #000; }
+
+    #zoneCount {
+      font-size: 13px;
+      color: #888888;
+    }
+
+    #savedMsg {
+      color: #44aa44;
+      font-size: 14px;
+      display: none;
+    }
+
+    #zoneList {
+      background: #1a1a1a;
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #888888;
+      min-height: 40px;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>Shelf Zone Setup — Draw zones over shelf areas</h2>
+
+  <div id="instructions">
+    1. You will see the live camera feed below.<br>
+    2. Click and drag to draw a rectangle over each shelf area.<br>
+    3. Draw one rectangle per shelf row or section.<br>
+    4. Click <strong>Save Zones</strong> when done — zones are saved permanently.<br>
+    5. Close this page. The main detection system will use these zones automatically.
+  </div>
+
+  <div id="canvas-container">
+    <video id="setupVideo" autoplay muted playsinline></video>
+    <canvas id="setupCanvas"></canvas>
+  </div>
+
+  <div id="controls">
+    <button id="btnSave">💾 Save Zones</button>
+    <button id="btnUndo">↩ Undo Last</button>
+    <button id="btnClear">🗑 Clear All</button>
+    <span id="zoneCount">Zones drawn: 0</span>
+    <span id="savedMsg">✓ Zones saved successfully!</span>
+  </div>
+
+  <div id="zoneList">No zones drawn yet.</div>
+
+  <script>
+    const video  = document.getElementById('setupVideo');
+    const canvas = document.getElementById('setupCanvas');
+    const ctx    = canvas.getContext('2d');
+
+    canvas.width  = 1280;
+    canvas.height = 720;
+
+    // All saved zones — array of {x, y, width, height, label}
+    let zones = [];
+
+    // Currently being drawn rectangle
+    let isDrawing   = false;
+    let startX      = 0;
+    let startY      = 0;
+    let currentRect = null;
+
+    // ── Start camera ──
+    async function startCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 1280, height: 720 }
+      });
+      video.srcObject = stream;
+    }
+
+    // ── Load any previously saved zones ──
+    function loadSavedZones() {
+      const saved = localStorage.getItem('shelfZones');
+      if (saved) {
+        zones = JSON.parse(saved);
+        updateZoneList();
+        redrawAll();
+      }
+    }
+
+    // ── Mouse events for drawing ──
+    canvas.addEventListener('mousedown', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      startX    = e.clientX - rect.left;
+      startY    = e.clientY - rect.top;
+      isDrawing = true;
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (!isDrawing) return;
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      currentRect = {
+        x:      Math.min(startX, mouseX),
+        y:      Math.min(startY, mouseY),
+        width:  Math.abs(mouseX - startX),
+        height: Math.abs(mouseY - startY)
+      };
+
+      redrawAll();
+      // Draw the in-progress rectangle in white dashed
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth   = 2;
+      ctx.setLineDash([6, 3]);
+      ctx.strokeRect(
+        currentRect.x,
+        currentRect.y,
+        currentRect.width,
+        currentRect.height
+      );
+      ctx.setLineDash([]);
+    });
+
+    canvas.addEventListener('mouseup', (e) => {
+      if (!isDrawing || !currentRect) return;
+      isDrawing = false;
+
+      // Only save if rectangle is big enough (at least 30x30 px)
+      if (currentRect.width > 30 && currentRect.height > 30) {
+        const zoneLabel = `Zone ${zones.length + 1}`;
+        zones.push({ ...currentRect, label: zoneLabel });
+        updateZoneList();
+      }
+
+      currentRect = null;
+      redrawAll();
+    });
+
+    // ── Draw all saved zones on canvas ──
+    function redrawAll() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      zones.forEach((zone, index) => {
+        // Zone rectangle — semi transparent fill
+        ctx.fillStyle   = 'rgba(255, 200, 0, 0.15)';
+        ctx.fillRect(zone.x, zone.y, zone.width, zone.height);
+
+        // Zone border
+        ctx.strokeStyle = '#f0c040';
+        ctx.lineWidth   = 2;
+        ctx.setLineDash([]);
+        ctx.strokeRect(zone.x, zone.y, zone.width, zone.height);
+
+        // Zone label
+        ctx.fillStyle = '#f0c040';
+        ctx.font      = 'bold 14px monospace';
+        ctx.fillText(zone.label, zone.x + 8, zone.y + 20);
+      });
+    }
+
+    // ── Update zone list text below canvas ──
+    function updateZoneList() {
+      const countEl = document.getElementById('zoneCount');
+      const listEl  = document.getElementById('zoneList');
+
+      countEl.textContent = `Zones drawn: ${zones.length}`;
+
+      if (zones.length === 0) {
+        listEl.textContent = 'No zones drawn yet.';
+        return;
+      }
+
+      listEl.innerHTML = zones.map((z, i) =>
+        `<div>${z.label}: x=${Math.round(z.x)}, y=${Math.round(z.y)}, 
+         w=${Math.round(z.width)}, h=${Math.round(z.height)}</div>`
+      ).join('');
+    }
+
+    // ── Save button ──
+    document.getElementById('btnSave').addEventListener('click', () => {
+      if (zones.length === 0) {
+        alert('Please draw at least one zone before saving.');
+        return;
+      }
+      localStorage.setItem('shelfZones', JSON.stringify(zones));
+      const msg = document.getElementById('savedMsg');
+      msg.style.display = 'inline';
+      setTimeout(() => msg.style.display = 'none', 3000);
+    });
+
+    // ── Undo last zone ──
+    document.getElementById('btnUndo').addEventListener('click', () => {
+      zones.pop();
+      updateZoneList();
+      redrawAll();
+    });
+
+    // ── Clear all zones ──
+    document.getElementById('btnClear').addEventListener('click', () => {
+      if (confirm('Clear all zones? This cannot be undone.')) {
+        zones = [];
+        localStorage.removeItem('shelfZones');
+        updateZoneList();
+        redrawAll();
+      }
+    });
+
+    // ── Boot ──
+    startCamera();
+    loadSavedZones();
+  </script>
+
+</body>
+</html>

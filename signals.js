@@ -100,3 +100,30 @@ const KP = {
   function clearPersonCounter(personIndex) {
     delete signalCounters[personIndex];
   }
+
+
+
+  // ═══════════════════════════════════════════════
+// ZONE LOADING
+// Loads shelf zones saved from setup.html
+// ═══════════════════════════════════════════════
+
+function loadShelfZones() {
+  const saved = localStorage.getItem('shelfZones');
+  return saved ? JSON.parse(saved) : [];
+}
+
+// Check if a point (x, y) is inside any shelf zone
+function isInsideAnyZone(x, y, zones) {
+  for (const zone of zones) {
+    if (
+      x >= zone.x &&
+      x <= zone.x + zone.width &&
+      y >= zone.y &&
+      y <= zone.y + zone.height
+    ) {
+      return true;
+    }
+  }
+  return false;
+}

@@ -12,6 +12,10 @@ const ctx    = canvas.getContext('2d');
 canvas.width  = VIDEO_WIDTH;
 canvas.height = VIDEO_HEIGHT;
 
+// Load shelf zones saved from setup.html
+// Falls back to empty array if none configured yet
+let shelfZones = [];
+
 // ═══════════════════════════════════════════════
 // LOAD MODELS
 // ═══════════════════════════════════════════════
@@ -34,7 +38,8 @@ async function loadModels() {
 // ═══════════════════════════════════════════════
 
 async function startCamera() {
-  // For webcam testing:
+  // Webcam for testing
+  // To use IP camera — comment out below and use video.src instead
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT }
   });
@@ -42,14 +47,15 @@ async function startCamera() {
   await new Promise(resolve => video.onloadedmetadata = resolve);
   video.play();
 
-  // For IP camera — comment out above and uncomment below:
-  // video.src = 'http://YOUR_CAMERA_IP/video.mjpg';
+  // IP camera example (uncomment when ready):
+  // video.src = 'http://admin:password@192.168.1.64/video.mjpg';
   // video.crossOrigin = 'anonymous';
 }
 
 // ═══════════════════════════════════════════════
 // POSE MATCHING
-// Match each COCO-SSD person box to its closest MoveNet pose
+// Match each COCO-SSD bounding box to its
+// closest MoveNet pose by shoulder midpoint proximity
 // ═══════════════════════════════════════════════
 
 function matchPoseToPerson(personBox, allPoses) {
@@ -79,12 +85,12 @@ function matchPoseToPerson(personBox, allPoses) {
     }
   }
 
-  // Only accept if pose is within 150px of box center
+  // Only accept match within 150px
   return bestDist < 150 ? bestPose : null;
 }
 
 // ═══════════════════════════════════════════════
-// DRAWING FUNCTIONS
+// DRAWING — KEYPOINTS
 // ═══════════════════════════════════════════════
 
 function drawKeypoints(keypoints) {
@@ -101,6 +107,10 @@ function drawKeypoints(keypoints) {
     ctx.fillText(kp.name, kp.x + 7, kp.y + 4);
   }
 }
+
+// ═══════════════════════════════════════════════
+// DRAWING — SKELETON
+// ═══════════════════════════════════════════════
 
 function drawSkeleton(keypoints) {
   const connections = [
@@ -122,7 +132,7 @@ function drawSkeleton(keypoints) {
   for (const kp of keypoints) kpMap[kp.name] = kp;
 
   ctx.strokeStyle = '#00ff00';
-  ctx.lineWidth = 2;
+  ctx.lineWidth   = 2;
 
   for (const [a, b] of connections) {
     const kpA = kpMap[a];
@@ -136,6 +146,12 @@ function drawSkeleton(keypoints) {
     ctx.stroke();
   }
 }
+
+// ═══════════════════════════════════════════════
+// DRAWING — SIGNAL KEYPOINTS
+// Highlights the 8 keypoints used in signal math
+// Yellow when a signal is active, white when normal
+// ═══════════════════════════════════════════════
 
 function drawSignalKeypoints(keypoints, signals) {
   const signalPoints = [
@@ -153,13 +169,42 @@ function drawSignalKeypoints(keypoints, signals) {
     if (!kp || kp.score < 0.3) continue;
 
     const active = signals.elbowActive || signals.shoulderActive;
+
     ctx.beginPath();
     ctx.arc(kp.x, kp.y, 8, 0, 2 * Math.PI);
-    ctx.fillStyle  = active ? '#ffff00' : '#ffffff';
+    ctx.fillStyle   = active ? '#ffff00' : '#ffffff';
     ctx.fill();
     ctx.strokeStyle = '#000000';
     ctx.lineWidth   = 1.5;
     ctx.stroke();
+  }
+}
+
+// ═══════════════════════════════════════════════
+// DRAWING — SHELF ZONES
+// Draws saved shelf zones as faint yellow
+// dashed rectangles on the live feed
+// ═══════════════════════════════════════════════
+
+function drawShelfZones(zones) {
+  if (!zones || zones.length === 0) return;
+
+  for (const zone of zones) {
+    // Semi-transparent yellow fill
+    ctx.fillStyle = 'rgba(240, 192, 64, 0.08)';
+    ctx.fillRect(zone.x, zone.y, zone.width, zone.height);
+
+    // Dashed yellow border
+    ctx.strokeStyle = 'rgba(240, 192, 64, 0.4)';
+    ctx.lineWidth   = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(zone.x, zone.y, zone.width, zone.height);
+    ctx.setLineDash([]);
+
+    // Zone label in corner
+    ctx.fillStyle = 'rgba(240, 192, 64, 0.6)';
+    ctx.font      = '11px monospace';
+    ctx.fillText(zone.label, zone.x + 4, zone.y + 14);
   }
 }
 
@@ -172,72 +217,101 @@ let activePeopleLastFrame = new Set();
 async function detectFrame() {
   frameCount++;
 
-  // Process every 3rd frame to save CPU
+  // Skip every 2 out of 3 frames to save CPU
   if (frameCount % 3 !== 0) {
     requestAnimationFrame(detectFrame);
     return;
   }
 
-  // Clear canvas each frame
+  // Clear canvas
   ctx.clearRect(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
 
-  // Step 1: Detect all persons in frame
+  // Always draw shelf zones on every frame
+  drawShelfZones(shelfZones);
+
+  // Step 1: Detect all persons
   const persons     = await cocoModel.detect(video);
   const personBoxes = persons.filter(p =>
     p.class === 'person' && p.score >= 0.5
   );
 
-  // Step 2: Get all poses in one call
+  // Step 2: Get all poses in one single call (MultiPose)
   const allPoses = await poseModel.estimatePoses(video);
 
-  // Track active people this frame for cleanup
+  // Track who is active this frame for cleanup
   const activePeopleThisFrame = new Set();
 
-  // Step 3: Process each person independently
+  // Step 3: Process each detected person independently
   for (let i = 0; i < personBoxes.length; i++) {
-    const person = personBoxes[i];
+    const person       = personBoxes[i];
     const [bx, by, bw, bh] = person.bbox;
 
-    // Match this person box to its closest pose
+    // Match this bounding box to its closest pose
     const matchedPose = matchPoseToPerson(person, allPoses);
     if (!matchedPose) continue;
 
     const keypoints = matchedPose.keypoints;
     activePeopleThisFrame.add(i);
 
-    // Step 4: Evaluate signals for this person
-    const signals = evaluateSignals(keypoints, i, VIDEO_HEIGHT);
+    // Step 4: Check if person is inside a shelf zone
+    // Use hip midpoint as person's ground position
+    const kpMap = {};
+    for (const kp of keypoints) kpMap[kp.name] = kp;
 
-    // Step 5: Calculate score and alert level
+    const lHip = kpMap['left_hip'];
+    const rHip = kpMap['right_hip'];
+
+    let personInZone = false;
+
+    if (lHip && rHip && lHip.score > 0.3 && rHip.score > 0.3) {
+      const hipMidX = (lHip.x + rHip.x) / 2;
+      const hipMidY = (lHip.y + rHip.y) / 2;
+      personInZone  = isInsideAnyZone(hipMidX, hipMidY, shelfZones);
+    }
+
+    // Step 5: Evaluate signals
+    // If zones are configured — only score inside zones
+    // If no zones configured yet — score everywhere (testing fallback)
+    const signals = (shelfZones.length === 0 || personInZone)
+      ? evaluateSignals(keypoints, i, VIDEO_HEIGHT)
+      : { elbowActive: false, shoulderActive: false };
+
+    // Step 6: Calculate score and level
     const score = calculateScore(signals);
     const level = getAlertLevel(score);
     const color = getBBoxColor(level);
 
-    // Build label
+    // Build bounding box label
     const sigText = [
       signals.elbowActive    ? 'S1' : '',
       signals.shoulderActive ? 'S2' : ''
     ].filter(Boolean).join('+');
 
-    const label = `P${i} ${sigText ? '| ' + sigText : ''} [${score}]`;
+    const zoneTag = personInZone ? ' [ZONE]' : '';
+    const label   = `P${i}${zoneTag} ${sigText ? '| ' + sigText : ''} [${score}]`;
 
-    // Step 6: Draw bounding box, skeleton, keypoints
-    drawBoundingBox(ctx, { x: bx, y: by, width: bw, height: bh }, label, color);
+    // Step 7: Draw everything for this person
+    drawBoundingBox(
+      ctx,
+      { x: bx, y: by, width: bw, height: bh },
+      label,
+      color
+    );
     drawKeypoints(keypoints);
     drawSkeleton(keypoints);
     drawSignalKeypoints(keypoints, signals);
 
-    // Step 7: Log alert if needed
+    // Step 8: Log if alert level warrants it
     if (level !== 'none') {
       logAlert(level, signals, i);
     }
   }
 
-  // Step 8: Clean up counters for people who left the frame
+  // Step 9: Clean up counters for people who left the frame
   for (const oldIndex of activePeopleLastFrame) {
     if (!activePeopleThisFrame.has(oldIndex)) {
-      clearPersonCounter(oldIndex); // cleans signals.js counters
-      clearPersonLog(oldIndex);     // cleans alert.js cooldown
+      clearPersonCounter(oldIndex); // signals.js
+      clearPersonLog(oldIndex);     // alert.js
     }
   }
   activePeopleLastFrame = activePeopleThisFrame;
@@ -246,10 +320,21 @@ async function detectFrame() {
 }
 
 // ═══════════════════════════════════════════════
-// BOOT
+// BOOT SEQUENCE
 // ═══════════════════════════════════════════════
 
 (async () => {
+  // Load zones first before anything else
+  shelfZones = loadShelfZones();
+  console.log(`Loaded ${shelfZones.length} shelf zone(s).`);
+  if (shelfZones.length === 0) {
+    console.warn(
+      'No shelf zones configured. ' +
+      'Open setup.html to draw zones. ' +
+      'Signals will score everywhere until zones are set.'
+    );
+  }
+
   await loadModels();
   await startCamera();
   detectFrame();
