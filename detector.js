@@ -285,6 +285,7 @@ async function detectFrame() {
     const sigText = [
       signals.elbowActive    ? 'S1' : '',
       signals.shoulderActive ? 'S2' : ''
+       
     ].filter(Boolean).join('+');
 
     const zoneTag = personInZone ? ' [ZONE]' : '';
